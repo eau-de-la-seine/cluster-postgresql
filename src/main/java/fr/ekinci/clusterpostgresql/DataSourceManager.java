@@ -40,7 +40,7 @@ public abstract class DataSourceManager {
     
     
     /* Utility attributes for runInitializeDataSources() */
-    private final static AtomicInteger initializationCounter = new AtomicInteger(0);
+    private final static Lock dataSourcesInitializationLock = new ReentrantLock();
     private final static Lock testingDataSourcesLock = new ReentrantLock();
     private final static int MULTICAST_DISCOVERY_TIME_OUT = 2_000; // unit time is millisecond
     private final static int DATASOURCE_VALIDATION_TIME_OUT = 3; // unit time is second
@@ -78,31 +78,30 @@ public abstract class DataSourceManager {
      * @throws SQLException 
     */
     public static boolean runInitializeDataSources() throws SQLException {
-        boolean hasRunned = false;
-
-        // if numberOfCall equals 1, it means that this current method is the first caller
-        final int numberOfCall = initializationCounter.incrementAndGet();
+        boolean hasRunned = false;        
         
-        try {
-            if(numberOfCall == 1 && !areAllCurrentDataSourcesValid()){
-                LOG.info("DataSourceManager.runInitializeDataSources() has started"); 
-                
-                initClientMulticastCheckAliveIfItsNull();
-                
-                sqlNodeInformations = checkLicenseForSqlNodeInformation(); // May launch exception
-                if(sqlNodeInformations != null){
-                    cleanOldDataSources();
-                    initializeNewDataSources(sqlNodeInformations);
+        if(dataSourcesInitializationLock.tryLock()){
+            try {
+                // Begin critic section
+                if(!areAllCurrentDataSourcesValid()){
+                    LOG.info("DataSourceManager.runInitializeDataSources() has started"); 
+                    
+                    initClientMulticastCheckAliveIfItsNull();
+                    
+                    sqlNodeInformations = checkLicenseForSqlNodeInformation(); // May launch exception
+                    if(sqlNodeInformations != null){
+                        cleanOldDataSources();
+                        initializeNewDataSources(sqlNodeInformations);
+                    }
+                    
+                    LOG.info("DataSourceManager.runInitializeDataSources() is now finished");
+                    hasRunned = true;
                 }
-                
-                LOG.info("DataSourceManager.runInitializeDataSources() is now finished");
-                hasRunned = true;
-            } else {
-                hasRunned = false;
+                // End of critic section
+            } finally {
+                dataSourcesInitializationLock.unlock();
             }
-        } finally {
-            initializationCounter.decrementAndGet();
-        }
+        } // end of tryLock 
         
         return hasRunned;
     }
